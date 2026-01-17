@@ -1,0 +1,106 @@
+import re
+import numpy as np
+import pandas as pd
+from gensim.models import Word2Vec
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+# ----------------------
+# Load Steam reviews
+# ----------------------
+df = pd.read_csv("/Users/eshanpatel/Downloads/steam_reviews.csv")
+df = df[["review", "recommendation"]]
+df = df.dropna()
+
+# Convert labels to numbers
+df["recommendation"] = (
+    df["recommendation"]
+    .str.lower()
+    .map({"recommended": 1, "not recommended": 0})
+)
+df = df.dropna(subset=["recommendation"])
+
+# ----------------------
+# Train / test split
+# ----------------------
+X_text = df["review"].values
+y = df["recommendation"].values
+
+X_train_text, X_test_text, y_train, y_test = train_test_split(
+    X_text,
+    y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
+)
+
+# ----------------------
+# Preprocessing
+# ----------------------
+def tokenize(text):
+    text = text.lower()
+    text = re.sub(r"[^a-z\s]", "", text)
+    return text.split()
+
+train_corpus = [tokenize(text) for text in X_train_text]
+
+# ----------------------
+# Train Word2Vec
+# ----------------------
+model = Word2Vec(
+    train_corpus,
+    vector_size=50,
+    window=4,
+    min_count=2,
+    sg=1
+)
+
+# ----------------------
+# Sentence vector
+# ----------------------
+def sentence_vector(tokens):
+    vecs = [model.wv[w] for w in tokens if w in model.wv]
+    if not vecs:
+        return np.zeros(model.vector_size)
+    return np.mean(vecs, axis=0)
+
+X_train_vec = np.array([sentence_vector(tokenize(t)) for t in X_train_text])
+X_test_vec = np.array([sentence_vector(tokenize(t)) for t in X_test_text])
+
+# ----------------------
+# Sentiment prototypes
+# ----------------------
+pos_vec = np.mean(X_train_vec[y_train == 1], axis=0)
+neg_vec = np.mean(X_train_vec[y_train == 0], axis=0)
+
+def cosine(a, b):
+    if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
+        return -1
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def predict(sentence):
+    v = sentence_vector(tokenize(sentence))
+    return 1 if cosine(v, pos_vec) > cosine(v, neg_vec) else 0
+
+# ----------------------
+# Accuracy on Steam reviews
+# ----------------------
+y_pred = [predict(t) for t in X_test_text]
+accuracy = accuracy_score(y_test, y_pred)
+
+print(f"\nTest accuracy: {accuracy:.4f}")
+
+# ----------------------
+# Manual test sentences
+# ----------------------
+tests = [
+    "great acting and wonderful story",
+    "painfully slow and boring",
+    "not bad but not great",
+    "I loved the visuals"
+]
+
+print("\nManual tests:")
+for t in tests:
+    label = "positive" if predict(t) == 1 else "negative"
+    print(t, "→", label)
